@@ -1,0 +1,14 @@
+# docker-compose.yml
+services:
+  aiap-service:
+    build: .
+    image: aiap_img
+    container_name: aiap
+    ports:
+      - "8080:8080"
+    restart: always
+    stdin_open: true
+    tty: true
+    command: ["tail","-f","/dev/null"]   # TEMP keepalive; replace with your real CMD later
+    volumes:
+      - ./workspace:/usr/src/app/workspace

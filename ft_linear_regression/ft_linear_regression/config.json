@@ -1,0 +1,11 @@
+{
+"learningRate": 0.01,
+"maxIterations": 1000,
+"tolerance": 0.000001,
+"trainRatio": 0.8,
+"dataFile": "data.csv",
+"modelJson": "model.json",
+"mileageJson": "mileagestats.json",
+"graphOut": "graph.png"
+}
+
