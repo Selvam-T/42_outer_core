@@ -1,125 +1,504 @@
-# Flutter Web-in-Docker (Web-First, APK-at-End)
+# Flutter in Docker:  
+## Full Setup vs Web-Only Setup
 
-This README explains how to run a Flutter app in a Docker container using a web workflow. The app is served on port **8080**, and you can view it at **http://localhost:8080** from your host browser.
+This README explains the **two Docker/Makefile setups** in this folder, what each one is for, how they differ, how to initialize a Flutter exercise correctly, and how to run them.
+
+Your project currently has **two pairs** of files:
+
+1. **Full setup**
+   - `Dockerfile`
+   - `Makefile`
+
+2. **Web-only setup**
+   - `Dockerfile.web-only`
+   - `Makefile.web-only`
+
+The full setup is heavier and meant for **Flutter web now, with Android build support later**.
+The web-only setup is lighter and meant for **immediate browser-based development and testing only**.
 
 ---
 
-## Prerequisites
-- **Docker** and **Make** installed on the host.
-- Project folder on host: `mobilePiscine/` (mounted into the container at `/app`).
-- A Flutter app folder named `ex00` inside `mobilePiscine/` (create it on first run if needed).
+## Separate host folders
+
+You decided to keep **two separate environments** so the two setups do not write into the same mounted host volume.
+
+Current host folders:
+
+- **Full setup** uses:
+  ```text
+  $(PWD)/mobilePiscine
+  ```
+- **Web-only setup** uses:
+  ```text
+  $(PWD)/mobilePiscineWeb
+  ```
+
+This prevents one setup from overwriting the other setup's files.
 
 ---
 
-## Makefile targets (summary)
+## Expected Flutter app paths
 
-### 1) Build the Docker image
+The Makefiles are meant to work with a **module root** plus a selectable **exercise folder**.
+
+Default variable pattern:
+
+```make
+WORKSPACE_DIR := mobileModule00
+EXERCISE := ex00
+APP_DIR := $(WORKSPACE_DIR)/$(EXERCISE)
+```
+
+That means the Flutter project is expected inside the selected exercise folder, and that folder should contain `pubspec.yaml`.
+
+For the **full setup**, the default Flutter project path is:
+
+```text
+mobilePiscine/mobileModule00/ex00
+```
+
+For the **web-only setup**, the default Flutter project path is:
+
+```text
+mobilePiscineWeb/mobileModule00/ex00
+```
+
+If you override the exercise at runtime, the path changes accordingly. Example:
+
+```bash
+make EXERCISE=ex01 web
+make -f Makefile.web-only EXERCISE=ex01 web
+```
+
+Those commands make the app path resolve to:
+
+```text
+mobilePiscine/mobileModule00/ex01
+```
+
+or:
+
+```text
+mobilePiscineWeb/mobileModule00/ex01
+```
+
+Inside the container, the host folders are mounted and used as the project workspace, while `APP_DIR` points to the specific Flutter app you want to run.
+
+---
+
+## Initialize the project
+
+Do **not** manually create an empty `ex00` folder and then try to run Flutter inside it.
+
+An empty folder is **not** a Flutter project. Flutter expects the selected app folder to already contain files such as:
+
+```text
+pubspec.yaml
+lib/
+web/
+```
+
+The correct approach is:
+
+1. create the Docker image
+2. open a shell inside the container
+3. go to the module folder
+4. run `flutter create ex00`
+
+That command generates the actual Flutter project inside `ex00`.
+
+### Full setup initialization
+
+1, Before creating the first Flutter exercise project, start the container first:
+
+```bash
+make build
+make run
+```
+2, Then, in another terminal, run:
+
+```bash
+make chmod
+```
+#### Why make chmod is needed  
+
+In the full setup, the project folder from the host machine is mounted into the container.
+The host user and the container user may not have the same UID/GID, so even if the folder exists, the container user may not have permission to write into it.
+
+The make chmod target fixes that by running a permission update inside the running container:
+
+it finds the running container created from the current image
+it executes chmod -R a+rwx /app/mobileModule00 as root inside the container
+because /app/mobileModule00 is a mounted host folder, the permission change also affects that host folder
+
+This makes the mounted project directory writable.  
+
+3, After that, return to the container terminal and initialize the Flutter project:
+
+```bash
+cd /app
+mkdir -p mobileModule00
+cd mobileModule00
+flutter create ex00
+```
+
+That creates the Flutter project at:
+
+```text
+mobilePiscine/mobileModule00/ex00
+```
+
+### Web-only setup initialization
+
+If the file is literally named `Makefile.web-only`, run it like this:
+
+```bash
+make -f Makefile.web-only build
+make -f Makefile.web-only shell
+```
+
+You can also use:
+
+```bash
+make -f Makefile.web-only run
+```
+
+`make shell` and `make run` both open an interactive container shell.
+For initialization, `make shell` is usually more convenient because it starts in `/workspace`.
+
+`make chmod` is **not** part of normal web-only initialization.
+Use it only if you hit a mounted-folder permission problem.
+
+Then inside the container:
+
+```bash
+cd /workspace
+mkdir -p mobileModule00
+cd mobileModule00
+flutter create ex00
+```
+
+That creates the Flutter project at:
+
+```text
+mobilePiscineWeb/mobileModule00/ex00
+```
+
+### Why not manually create `ex00`
+
+If you manually create:
+
+```text
+mobileModule00/ex00
+```
+
+as an empty folder, then `make web` or `make web-build` will fail because Flutter will not find a project root in that folder.
+
+---
+
+## 1) Full setup: `Dockerfile` + `Makefile`
+
+**Note:** the full-setup `Makefile` directives may still need some tweaking depending on how you want to organize your Android and web workflow.
+
+### Purpose
+Use this set when you want a **broader Flutter environment**.
+
+This setup includes:
+- Flutter SDK
+- Dart SDK
+- Java JDK
+- Android command-line tools
+- Android SDK components
+- NDK
+
+This is the setup to keep when you want to:
+- run Flutter in Docker now
+- test on web
+- later build an Android APK from the same environment
+- later explore USB passthrough, device testing, or other Android-related tooling
+
+### Trade-off
+- **Pros:** more complete, Android-ready
+- **Cons:** much larger image, slower build, more storage used
+
+### Build the full image
 ```bash
 make build
 ```
-- Builds the image tagged as `$(NAME)` (ensure `NAME := your-image-tag` is set in the Makefile or in your shell).
-- Installs and configures the Flutter/Android SDK toolchain inside the image (per your Dockerfile).
 
-### 2) Start a generic shell in the container
+### Open a shell inside the full container
 ```bash
 make run
 ```
-- Opens an interactive shell (`bash`) in the container.
-- Mounts your host folder `$(PWD)/mobilePiscine` to `/app` inside the container.
-- Port `8080` is published for you to run a dev server manually if you want.
 
-### 3) Start the web dev server (preferred for web workflow)
+### Start the Flutter app on the web
 ```bash
 make web
 ```
-- Runs `flutter config --enable-web` (idempotent).
-- Changes into `ex00` and starts:
-  ```bash
-  flutter run -d web-server --web-port 8080 --web-hostname 0.0.0.0
+
+Then open:
+
+```text
+http://localhost:8080
+```
+
+### Build Android APK with the full setup
+```bash
+make apk
+```
+
+Or use the wrapper target:
+
+```bash
+make launch_apk
+```
+
+### Launch web with wrapper target
+```bash
+make launch_web
+```
+
+### Other full-setup commands
+```bash
+make clean
+make prune
+make chmod
+```
+
+### Notes about the full setup
+- This is the **default** setup when you run plain `make ...` because the default file name is `Makefile`.
+- This setup mounts:
+  ```text
+  $(PWD)/mobilePiscine -> /app
   ```
-- The app is now served from the container on **port 8080**.
+- `make web` in this setup may expose extra ports for VM service experiments, depending on your Makefile.
+- This setup is the better choice when you eventually want Android build support without redesigning the container.
 
 ---
 
-## View the app
-Open your host browser at:
+## 2) Web-only setup: `Dockerfile.web-only` + `Makefile.web-only`
 
-**http://localhost:8080**
+### Purpose
+Use this set when you want the **smallest practical Flutter container for browser testing**.
 
-You should see the default Flutter template (or your app UI if you’ve already modified it).
+This setup includes only what you need for:
+- Flutter SDK
+- Dart SDK
+- Flutter web support
+- running the app in a browser through `web-server`
+- building a web output with `flutter build web`
+
+It does **not** include Android SDK / JDK / NDK.
+
+### Trade-off
+- **Pros:** smaller, cleaner, faster to build, less storage use
+- **Cons:** no Android APK build from this image
+
+### Why this is your immediate-purpose setup
+This is the right set when your goal is:
+- learn Flutter and Dart
+- test the app in a browser
+- avoid Android emulator or device complexity for now
+- reduce Docker image size
+
+### Important difference from the full setup
+The web-only setup mounts a **different host folder**:
+
+```text
+$(PWD)/mobilePiscineWeb
+```
+
+That means it is isolated from the full setup.
 
 ---
 
-## First-time setup (if `ex00` doesn’t exist yet)
+## How to run the web-only Makefile
 
-If the `ex00` folder is missing in `mobilePiscine/`, you can create it:
+If the file is literally named `Makefile.web-only`, tell `make` which file to use.
 
-**Option A — via `make run`:**
+Example:
+
+```bash
+make -f Makefile.web-only build
+```
+
+For convenience, you may rename `Makefile.web-only` to `Makefile` before using it day to day.
+In the command examples below, the web-only file is assumed to be the active file named `Makefile`.
+
+### Build the web-only image
+```bash
+make build
+```
+
+### Open a shell inside the web-only container
+```bash
+make shell
+```
+
+### Alternate interactive shell target
 ```bash
 make run
-# then inside the container:
-cd /app
-flutter config --enable-web
+```
+
+`make run` also opens a container shell.
+For normal development, you still use `make web` on the host.
+
+### Check the Flutter web environment
+```bash
+make doctor
+```
+
+### Run the Flutter app in web-server mode
+```bash
+make web
+```
+
+Then open:
+
+```text
+http://localhost:8080
+```
+
+### Run a different exercise with `EXERCISE=...`
+If your Makefile uses:
+
+```make
+WORKSPACE_DIR := mobileModule00
+EXERCISE := ex00
+APP_DIR := $(WORKSPACE_DIR)/$(EXERCISE)
+```
+
+then `EXERCISE := ex00` is only the **default**.
+
+You can override it from the command line for a single run:
+
+```bash
+make EXERCISE=ex01 web
+```
+
+Why this works:
+- `EXERCISE=ex01` overrides the default `ex00` for that command only
+- `APP_DIR` becomes `mobileModule00/ex01`
+- `make` then runs Flutter commands inside `mobilePiscineWeb/mobileModule00/ex01`
+- this is useful because `mobileModule00` can contain multiple exercises such as `ex00`, `ex01`, `ex02`, and `ex03`
+
+Important:
+- `make EXERCISE=ex01 ...` does **not** create `ex01` automatically
+- the selected exercise folder should already be the actual Flutter app folder
+- that means it should contain `pubspec.yaml`
+
+### Build deployable web output
+```bash
+make web-build
+```
+
+The generated output will be in the selected exercise folder. With the default `EXERCISE := ex00`, that is:
+
+```text
+mobilePiscineWeb/mobileModule00/ex00/build/web
+```
+
+If you run, for example:
+
+```bash
+make EXERCISE=ex01 web-build
+```
+
+then the output will be:
+
+```text
+mobilePiscineWeb/mobileModule00/ex01/build/web
+```
+
+### Permissions troubleshooting
+```bash
+make run
+```
+
+In another terminal:
+
+```bash
+make chmod
+```
+
+Use `make chmod` only when the mounted project folder has permission issues.
+It is not required as a normal initialization step.
+
+### Remove the web-only image
+```bash
+make clean
+```
+
+### Remove image and prune Docker cache
+```bash
+make prune
+```
+
+---
+
+## Which set should you use?
+
+### Use the full setup (`Dockerfile` + `Makefile`) when:
+- you want Android build support
+- you want one container that can later build APKs
+- you want to explore device testing later
+- you are okay with a heavier Docker image
+
+### Use the web-only setup (`Dockerfile.web-only` + `Makefile.web-only`) when:
+- you only want browser testing right now
+- you want less storage use
+- you want a simpler container
+- Android or USB passthrough work can wait until later
+
+For your current goal, **use the web-only setup**.
+
+---
+
+## Recommended workflow right now
+
+### First time
+```bash
+make build
+make shell
+```
+
+Then inside the container:
+
+```bash
+cd /workspace
+mkdir -p mobileModule00
+cd mobileModule00
 flutter create ex00
-cd ex00
-flutter run -d web-server --web-port 8080 --web-hostname 0.0.0.0
 ```
 
-**Option B — adjust your Makefile** to create `ex00` automatically before running.
-
----
-
-## Stopping the server
-In the terminal that’s running `flutter run`:
-- Press `q` to stop, or
-- `Ctrl + C` to interrupt the process.
-
-The container started by `make web` will exit when the command ends.
-
----
-
-## Hot reload / Hot restart (current status: **not working**)
-At the moment, pressing `r` (hot reload) or `R` (hot restart) in the `flutter run` terminal **times out**. This is **unresolved** in the current setup.
-
-**Why it may be failing (brief):**
-- The `web-server` device runs a **Dart VM service** bound to `127.0.0.1` **inside the container**; your **host browser** can’t attach to that endpoint by default.
-- The **Dart Debug Chrome extension** may be missing, or the browser session isn’t attached to the active VM service.
-- Docker networking / port mapping for the VM service can interfere with the tool’s handshake.
-- Service worker or caching can sometimes block updates.
-
-**Potential directions (not yet integrated):**
-- Use `flutter run -d chrome` (requires a Chrome installation that the Flutter tool can control).
-- Map a stable VM service port (e.g., `--host-vmservice-port 5555` → expose with `-p 5555:5555`) and ensure the browser attaches.
-- Install/enable the **Dart Debug Extension** in Chrome and confirm it’s connected.
-- Hard refresh the app (`Ctrl+Shift+R`), or clear site data to avoid stale service worker caches.
-
----
-
-## Building an APK (later, same image)
-When you want an Android binary:
+### Normal web development
 ```bash
-make run
-# inside the container:
-cd /app/ex00
-flutter build apk --release
-# resulting file:
-# build/app/outputs/flutter-apk/app-release.apk
+make web
 ```
 
-This uses the Android SDK components installed by your Dockerfile.
+Then visit:
 
----
+```text
+http://localhost:8080
+```
 
-## Troubleshooting
-- **Port not reachable**: Ensure `-p 8080:8080` is present and the app is running with `--web-hostname 0.0.0.0`.
-- **Permissions on host**: If you hit permission errors, ensure your host user can write into `mobilePiscine/`. (Temporary unblock: `chmod -R 777 mobilePiscine`, though a proper UID/GID match is preferred.)
-- **`ex00` not found**: Create the app folder with `flutter create ex00` under `/app` (i.e., host `mobilePiscine/`).
+Only use `make chmod` if you later run into a permission problem with files under `mobilePiscineWeb`.
 
----
-
-## Quick command recap
+### When you want a build artifact for the browser
 ```bash
-make build         # Build the image
-make web           # Start the web server for Flutter on 0.0.0.0:8080
-# Visit http://localhost:8080 on the host
+make web-build
 ```
+
+---
+
+## Summary
+
+- `Dockerfile` + `Makefile` = heavier environment in `mobilePiscine`
+- `Dockerfile.web-only` + `Makefile.web-only` = lighter environment in `mobilePiscineWeb`
+- keeping separate host folders avoids overwrite conflicts
+- do **not** manually create an empty exercise folder and treat it as a Flutter project
+- initialize the exercise with `flutter create ex00`
+- use `EXERCISE=...` to switch between `ex00`, `ex01`, `ex02`, and `ex03`
+- `make run` is an alternate interactive shell target in the web-only setup
+- `make chmod` in the web-only setup is for permission troubleshooting only, not normal initialization
+- for now, your **web-only setup is the better day-to-day workflow**

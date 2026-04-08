@@ -1,0 +1,97 @@
+IMAGE_NAME ?= flutter-android-goinfre
+USER_NAME ?= $(shell id -un)
+HOST_PROJECT_DIR ?= /home/goinfre/mobile
+HOST_CACHE_DIR ?= /home/goinfre/.docker-android
+HOST_HOME_DIR ?= $(HOST_CACHE_DIR)/home
+HOST_PUB_CACHE_DIR ?= $(HOST_CACHE_DIR)/pub-cache
+HOST_GRADLE_DIR ?= $(HOST_CACHE_DIR)/gradle
+HOST_ANDROID_USER_DIR ?= $(HOST_CACHE_DIR)/android-user
+
+CONTAINER_WORKDIR ?= /workspace
+MODULE ?= mobileModule00
+EXERCISE ?= ex00
+APP_DIR ?= $(CONTAINER_WORKDIR)/$(MODULE)/$(EXERCISE)
+
+CONTAINER_ENV = \
+	-e HOME=/cache/home \
+	-e PUB_CACHE=/cache/pub-cache \
+	-e GRADLE_USER_HOME=/cache/gradle \
+	-e ANDROID_USER_HOME=/cache/android-user \
+	-e ANDROID_HOME=/opt/android-sdk \
+	-e FLUTTER_HOME=/opt/flutter \
+	-e PATH=/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+CONTAINER_VOLUMES = \
+	-v $(HOST_PROJECT_DIR):$(CONTAINER_WORKDIR) \
+	-v $(HOST_HOME_DIR):/cache/home \
+	-v $(HOST_PUB_CACHE_DIR):/cache/pub-cache \
+	-v $(HOST_GRADLE_DIR):/cache/gradle \
+	-v $(HOST_ANDROID_USER_DIR):/cache/android-user
+
+DOCKER_RUN = docker run --rm -it \
+	--user $$(id -u):$$(id -g) \
+	$(CONTAINER_ENV) \
+	$(CONTAINER_VOLUMES) \
+	-w $(CONTAINER_WORKDIR) \
+	$(IMAGE_NAME)
+
+help:
+	@echo "make init      -> create host project/cache folders"
+	@echo "make build     -> build Docker image"
+	@echo "make shell     -> open an interactive shell in the container"
+	@echo "make doctor    -> run flutter doctor"
+	@echo "make web       -> run the selected exercise on web-server"
+	@echo "make apk       -> build a release APK for the selected exercise"
+	@echo ""
+	@echo "Default host project path: $(HOST_PROJECT_DIR)"
+	@echo "Selected app path inside container: $(APP_DIR)"
+	@echo "Override example: make web MODULE=mobileModule00 EXERCISE=ex01"
+
+init:
+	@mkdir -p $(HOST_PROJECT_DIR)
+	@mkdir -p $(HOST_HOME_DIR) $(HOST_PUB_CACHE_DIR) $(HOST_GRADLE_DIR) $(HOST_ANDROID_USER_DIR)
+	@echo "Created/verified: $(HOST_PROJECT_DIR)"
+	@echo "Created/verified cache dirs under: $(HOST_CACHE_DIR)"
+
+build:
+	@echo "Building Docker image $(IMAGE_NAME)..."
+	@docker build -t $(IMAGE_NAME) -f Dockerfile .
+	@echo "Docker image built successfully."
+
+shell: init
+	@echo "Opening shell with project mounted from $(HOST_PROJECT_DIR)..."
+	@$(DOCKER_RUN) bash
+
+run: shell
+
+doctor: init
+	@$(DOCKER_RUN) bash -lc 'flutter doctor -v'
+
+web: init
+	@echo "Starting Flutter web-server for $(APP_DIR)..."
+	@docker run --rm -it \
+		--user $$(id -u):$$(id -g) \
+		-p 8080:8080 \
+		-p 5555:5555 \
+		$(CONTAINER_ENV) \
+		$(CONTAINER_VOLUMES) \
+		-w $(CONTAINER_WORKDIR) \
+		$(IMAGE_NAME) \
+		bash -lc 'flutter config --enable-web && cd "$(APP_DIR)" && flutter pub get && flutter run -d web-server --web-port 8080 --web-hostname 0.0.0.0 --host-vmservice-port 5555'
+	@echo "Visit http://localhost:8080"
+
+apk: init
+	@echo "Building release APK for $(APP_DIR)..."
+	@$(DOCKER_RUN) bash -lc 'cd "$(APP_DIR)" && flutter pub get && flutter build apk --release'
+	@echo "APK output: $(HOST_PROJECT_DIR)/$(MODULE)/$(EXERCISE)/build/app/outputs/flutter-apk/"
+
+clean:
+	@docker image rm -f $(IMAGE_NAME) >/dev/null 2>&1 || true
+	@echo "Removed image: $(IMAGE_NAME)"
+
+prune: clean
+	@docker system prune -af || true
+	@docker volume prune -f || true
+	@echo "Docker system prune complete."
+
+.PHONY: help init build shell run doctor web apk clean prune

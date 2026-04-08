@@ -5,7 +5,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install basics: curl, git, unzip, and Java (JDK 17)
-# 'ca-certificates' is crucial for SSL as discussed before
+# 'ca-certificates' is crucial for SSL
 RUN apt-get update && apt-get install -y \
     curl \
     git \
@@ -22,6 +22,8 @@ RUN apt-get update && apt-get install -y \
 ENV ANDROID_HOME=/usr/local/android-sdk
 ENV FLUTTER_HOME=/usr/local/flutter
 ENV PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$FLUTTER_HOME/bin:$PATH"
+# We add the internal Dart SDK path so 'dart' command works directly
+ENV PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$FLUTTER_HOME/bin:$FLUTTER_HOME/bin/cache/dart-sdk/bin:$PATH"
 
 # 3. ANDROID SDK SETUP
 # We download the "Command Line Tools" only.
@@ -38,12 +40,15 @@ RUN mkdir -p $ANDROID_HOME/cmdline-tools \
 
 # 4. INSTALL SPECIFIC ANDROID COMPONENTS
 # We use 'yes' to automatically accept licenses.
-# We install exactly what you listed: build-tools 34, platform 34, etc.
+# We install build-tools 34, platform 34, etc.
 RUN yes | sdkmanager --licenses \
-    && sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+    && sdkmanager "platform-tools" \
+                  "platforms;android-36" \
+                  "build-tools;36.0.0" \
+                  "ndk;28.2.13676358"
 
 # 5. PREPARE NON-ROOT USER 
-# We create a user named 'developer' with UID 1000 (Standard linux user_
+# We create a user named 'developer' with UID 1000 (Standard linux user)
 RUN useradd -m -s /bin/bash -u 1000 developer
 
 # We give this user ownership of the SDK folders so they can update them
@@ -61,11 +66,11 @@ RUN git clone https://github.com/flutter/flutter.git $FLUTTER_HOME -b stable
 # Tell git to trust this directory (fixes "dubious ownership" errors)
 RUN git config --global --add safe.directory $FLUTTER_HOME
 
-# Disable analytics and precache (downloads basic binaries)
-RUN flutter config --no-analytics \
-    && flutter config --enable-android \
-    && flutter precache
+# This triggers the download of the internal Dart SDK
+RUN flutter doctor
 
-# 6. WORKSPACE
-# Create a folder for your app code
+# 7. WORKSPACE
+USER root
+RUN mkdir -p /app && chown developer:developer /app
 WORKDIR /app
+USER developer

@@ -21,7 +21,8 @@ Think of building a Docker image like making a sandwich. You have to lay the ing
 - Docker: This is the trickiest part.  
  We download the Command Line Tools zip file from Google.  
  We unzip it.  
- We use the sdkmanager (inside that zip) to download the specific parts you listed (platforms;android-34, build-tools;34.0.0).  
+ We use the sdkmanager (inside that zip) to download the specific parts you listed (platforms;android-36, build-tools;36.0.0).  
+ To prevent the container from trying to download the NDK at runtime, we "bake" it into the image. 
  Critical Step: We must accept the Google Licenses automatically using a script (using yes), otherwise the build fails waiting for a human to type "y".  
 
 ***The Topping (Flutter):***  
@@ -62,10 +63,130 @@ docker run -it --privileged -v /dev/bus/usb:/dev/bus/usb -v $(pwd):/app my-flutt
 - What it does: This is the specific command to run upon starting.  
 - Why you need it: It opens a standard Linux shell (Terminal) inside the container so you can type commands.  
 
+## 2. Tell Make to ignore the exit code
 
+***The make: *** [Makefile:14: run] Error 1 occurs because Make is designed to stop and complain whenever a command returns a "non-zero" exit code.***
 
-## 2. Physical Phone Workflow (Failed)
-(See Pivot to Web) 
+If you want to exit your container and not have make scream at you, you can tell Makefile to ignore the return code by adding a - (minus sign) before the docker command.
+
+-@docker run --rm -it \
+		-p 8080:8080 \
+		-v $(PWD)/mobilePiscine:/app \
+		$(NAME) bash
+
+## 3. Improve the chmod target (Dynamic Container ID)  
+
+The chown in your Dockerfile is ineffective the moment you use a Volume Mount (-v).  
+
+***1. Why the Dockerfile chown fails for /app***  
+- Build-Time vs. Runtime: The chown command in your Dockerfile happens during the Build Phase. At that moment, it correctly sets permissions for the empty folder inside the image.  
+- The "Masking" Effect: When you run the container with -v $(PWD)/mobilePiscine:/app, Docker "mounts" your host folder over the internal one. It’s like placing a sticker over a drawing; the drawing (the Dockerfile permissions) is still there, but you can only see and interact with the sticker (the Host permissions).  
+- Ownership Inheritance: Docker does not change the ownership of your host files to match the container user. If your host files are owned by "You" (Host User), the container user "developer" is treated as a "Stranger" with no right to delete or modify them.  
+
+***2. Why the PathAccessException happens***  
+- Flutter is very aggressive with its build/ folder. Every time you run the app, it tries to delete "Stamps" (temporary files) to ensure a fresh build.  
+- If those Stamps were created by your Host Machine (if you ever ran flutter there) or a previous Container session that had different permissions, the current "developer" user crashes because it doesn't have the "Write/Delete" authority over those specific files.  
+
+***3. Why make chmod is the solution***  
+- Runtime Fix: make chmod doesn't happen during the image build; it happens while the "sticker" (the host volume) is already applied.  
+- Root Authority: By using docker exec -u 0 (Root), you are telling the container to use "Superuser" powers to reach out and change the permissions of those host files from the inside.
+The Result: It changes the permissions to a+rwx (All users can Read, Write, and Execute). Now, the "developer" user is no longer a "Stranger" and is allowed to delete the build stamps.  
+
+***Comparison Table for Notes:***  
+ 
+Dockerfile:  
+RUN chown developer /app  
+Sets permissions for the internal (empty) folder.  
+
+Docker Run:  
+-v host_folder:/app  
+Overrides internal permissions with Host permissions.   
+
+Make chmod:  
+docker exec -u 0 chmod ...  
+Forces new permissions onto the Host files while they are inside the container.  
+
+## 4. What is the Flutter build/ folder?  
+The build/ folder is the workspace where Flutter does all its heavy lifting. It is not part of your source code; it is the output of the compilation process.  
+
+***What’s inside it:***  
+- Platform-specific code: Subfolders for web, android, ios, etc., containing the actual files the OS needs to run the app.  
+- Compiled Dart: Your Dart code translated into JavaScript (for web) or Bytecode (for mobile).  
+- Assets: Optimized versions of your images, fonts, and icons.
+Incremental "Stamps": Small files (like the .stamp files you saw) that tell Flutter: "I already compiled this part, don't do it again."  
+
+## 5. Does the Dockerfile need a "Dart" section?
+No. Because you have $FLUTTER_HOME/bin in your PATH, you can already run Dart commands by typing flutter dart.  
+
+## 6. What display/target am I prepared for?
+
+**From the Dockerfile:**
+
+I installed -     
+- Flutter  
+- Android SDK command-line tools  
+- platform-tools / build-tools / platform 34  
+
+I do not have -  
+- Chrome installation  
+- Android emulator setup  
+- Play Store signing/release setup  
+
+**So I am mainly prepared for:**
+
+Best-supported by this Dockerfile
+
+- 1. Android APK sideload (manual) → Yes  
+- 2. Web dev server → Possible  (Not permitted in the project)
+- 3. Build static web → Possible (Not permitted in the project)
+- 4. Android App Bundle (Play Store) → possible to build later, but not really what this Dockerfile is specifically prepared for  
+
+**Most accurate summary:**
+
+Prepared strongest for:  
+- Android build tooling  
+
+Also usable for:  
+- Flutter web development/build  
+
+Not clearly prepared for:  
+- full Play Store release pipeline  
+
+### 7. Development vs. Deployment: A Technical Comparison  
+
+***1. Compilation & Target***  
+Web-Server: Uses the Dart Dev Compiler (dartdevc). It transpiles your Dart code into readable JavaScript. It is optimized for "Hot Restart" speed, not execution performance.  
+APK Build: Uses Ahead-of-Time (AOT) compilation. It compiles Dart into native ARM Machine Code. It then uses Gradle (Java) to bundle the code, the Flutter Engine, and your assets into a single compressed file.  
+
+***2. Resource Requirements (The "Heavyweight" Factor)***    
+Web-Server (Lightweight): Requires almost no extra tools. It uses the Dart SDK already inside Flutter. It has a very small disk footprint.  
+APK Build (Heavyweight): Requires the Full Android Toolchain.  
+JDK: To run the Gradle build system.  
+Android SDK: To package the resources.  
+NDK: To compile native C/C++ components (often 1GB+).  
+Disk Space: Needs significantly more storage for caches (stored in .gradle).  
+
+***3. Docker Networking & Ports***    
+Web-Server (Needs Ports): Requires mapping ports (e.g., -p 8080:8080) because it hosts a live web server. It also uses -p 5555:5555 (VM Service) to allow the Host debugger to talk to the Container.  
+APK Build (No Ports): Does not need any port mapping. It doesn't "listen" for connections; it just performs a calculation and writes a file to the disk.  
+
+***4. File Output & Persistence***  
+Web-Server: Its output is volatile. The compiled JavaScript is usually served from the build/ folder but is intended to be viewed in a browser.  
+APK Build: Its output is a physical file.
+Path: build/app/outputs/flutter-apk/app-release.apk.
+Persistence: Because of your Docker Volume (-v), this file appears on your Host machine automatically so you can move it to a phone or submit it for grading.  
+
+***5. The "Permission" Conflict***  
+Web-Server: Very sensitive to permission errors in the build/ folder because it constantly tries to delete and rewrite "Stamps" (.stamp files) every time you refresh.  
+Fix: Often requires the Symlink trick to keep the build/ folder inside the container's private memory.  
+APK Build: Less sensitive to live permission locks but prone to "No space left on device" errors due to the massive size of the Android NDK and Gradle caches.  
+
+## Original failed attempts - read for interest
+
+### 1. My initial attempt at Physical Phone Workflow (Failed)
+(It was suggested I Pivot to using web dev server.)
+Additionally, I must not that my dockerfile installatio is not set up for physical phone workflow.
+
 This is the exact sequence of actions you will take to solve Exercise 00:  
 
 1. Physical Setup: Enable "USB Debugging" on your real Android phone and plug it into your computer via USB.  
@@ -91,7 +212,7 @@ This is the exact sequence of actions you will take to solve Exercise 00:
 - No GUI Complexity: You don't need X11, Wayland, or remote desktops. You look at your phone for UI, and your terminal for code/logs.
 
 
-## 3. Pivot to Web
+### 2. I decided to pivot to using Web dev server as target
   
 ### Why we stopped:  
 The combination of Hardware Restrictions (USB Passthrough denied), Network Isolation (WiFi blocked), Admin Restrictions (Tethering blocked), and Hardware Detection Issues (Cable/Driver issues) created too many points of failure.

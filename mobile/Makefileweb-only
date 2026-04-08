@@ -1,0 +1,100 @@
+# 1. This makefile is for Dockerfile.web-only
+# 2. Command to run Makefile.web-only - 
+#	$ make -f Makefile.web-only build (run or web or clean)
+# 3. Or for comvenience I could rename this to 'Makefile'
+
+IMAGE_NAME := flutter-web-image
+FLUTTER := /opt/flutter/bin/flutter
+
+HOST_APP_ROOT := $(PWD)/mobilePiscineWeb
+WORKSPACE := /workspace
+
+PARENT_DIR := mobileModule00
+EXERCISE := ex00
+APP_DIR := $(PARENT_DIR)/$(EXERCISE)
+
+
+dev: build web
+release: build web-build
+
+build:
+	@echo "Building web-only Flutter image..."
+	@docker build --no-cache -t $(IMAGE_NAME) -f Dockerfile.web-only .
+	@echo "Done."
+
+run:
+	@echo "Starting container shell..."
+	@echo "Inside the container, run Flutter commands directly."
+	@docker run --rm -it \
+		-p 8080:8080 \
+		-v $(HOST_APP_ROOT):$(WORKSPACE) \
+		-w $(WORKSPACE) \
+		$(IMAGE_NAME) bash
+
+shell: run
+
+# Quick check that Flutter exists in the image.
+check-flutter:
+	@docker run --rm -it \
+		-v $(HOST_APP_ROOT):$(WORKSPACE) \
+		-w $(WORKSPACE) \
+		$(IMAGE_NAME) bash -lc '\
+			echo "PATH=$$PATH" && \
+			ls -l /opt/flutter/bin/flutter && \
+			$(FLUTTER) --version'
+
+doctor:
+	@echo "Checking Flutter web setup..."
+	@docker run --rm -it \
+		-v $(HOST_APP_ROOT):$(WORKSPACE) \
+		-w $(WORKSPACE) \
+		$(IMAGE_NAME) bash -lc '\
+			$(FLUTTER) doctor -v && \
+			$(FLUTTER) devices'
+
+# Serves the app at http://localhost:8080
+web:
+	@echo "Starting Flutter web-server..."
+	@docker run --rm -it \
+		-p 8080:8080 \
+		-v $(HOST_APP_ROOT):$(WORKSPACE) \
+		-w $(WORKSPACE) \
+		$(IMAGE_NAME) bash -lc '\
+			cd $(APP_DIR) && \
+			$(FLUTTER) pub get && \
+			$(FLUTTER) run -d web-server \
+			  --web-hostname 0.0.0.0 \
+			  --web-port 8080'
+
+web-build:
+	@echo "Building Flutter web output..."
+	@docker run --rm -it \
+		-v $(HOST_APP_ROOT):$(WORKSPACE) \
+		-w $(WORKSPACE) \
+		$(IMAGE_NAME) bash -lc '\
+			cd $(APP_DIR) && \
+			$(FLUTTER) pub get && \
+			$(FLUTTER) build web'
+	@echo "Output: mobilePiscineWeb/$(APP_DIR)/build/web"
+
+clean:
+	@echo "Removing image..."
+	@docker image rm -f $(IMAGE_NAME) >/dev/null 2>&1 || true
+	@echo "Done."
+
+prune: clean
+	@echo "Pruning Docker cache..."
+	@docker system prune -af || true
+	@echo "Done."
+
+# Run this in another host terminal while the container is running.
+chmod:
+	@ID=$$(docker ps -q --filter ancestor=$(IMAGE_NAME)); \
+	if [ -n "$$ID" ]; then \
+		docker exec -u 0 $$ID sh -c "chmod -R a+rwx $(WORKSPACE)/$(PARENT_DIR)"; \
+		echo "Permissions fixed for container $$ID"; \
+	else \
+		echo "No running container found."; \
+	fi
+
+.PHONY: build run shell check-flutter doctor web web-build clean prune dev release chmod
